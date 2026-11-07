@@ -1,28 +1,18 @@
-r"""Score a YOLO model on BOAT detection on the LaRS val split, with one fixed set of rules.
+r"""Boat-only detection benchmark on LaRS val, for comparing models under identical rules
+(e.g. COCO-pretrained yolo11n.pt vs. our LaRS-trained weights). Appends a row per run
+to runs/eval/boat_eval.csv.
 
-Use it to compare models fairly, e.g. the off-the-shelf YOLO11n (trained on the COCO
-everyday-objects dataset) against our LaRS-trained model:
+Boats only because it's the one class COCO and LaRS share (~74% of LaRS val objects).
 
-    .venv\Scripts\python scripts\eval_boats.py --model yolo11n.pt
-    .venv\Scripts\python scripts\eval_boats.py --model runs\detect\yolo11n_lars\weights\best.pt
-
-Each run prints the scores and adds a row to runs/eval/boat_eval.csv.
-
-Why boats only: COCO has a "boat" class but no buoy, paddle board or swimmer-in-water
-classes, so boats are the one fair head-to-head. Boats are ~74% of the objects in LaRS val.
-
-Rules (the same for every model):
-  - Ground truth comes straight from LaRS's own JSON (not our converted labels), so a
-    converter bug can't affect the score: "Boat/ship" + "Row boats", merged into "boat".
-  - Predictions: classes named "boat" or "row_boat", merged into "boat". COCO has
-    "boat"; our LaRS model has both. All other classes are ignored.
-  - A boat prediction that doesn't match a real boat but sits on another LaRS object
-    (paddle board, buoy, swimmer, ...) or on a crowd box (a cluster of boats labeled as
-    one box) is ignored instead of counted as a mistake, and crowd boxes don't count as
-    boats the model had to find. This is generous to the off-the-shelf model, so any
-    improvement we report over it is conservative.
-  - The accuracy math is Ultralytics' own: the same box matching and the same
-    ap_per_class function behind the mAP printed during training.
+Rules:
+  - GT is read from LaRS's raw JSON, not our converted labels, so converter bugs can't
+    leak into the score. Boat/ship + Row boats -> "boat".
+  - Predicted classes named "boat"/"row_boat" -> "boat"; everything else ignored.
+  - Unmatched boat predictions with IoU >= 0.5 to a non-boat object or a crowd box are
+    ignored rather than counted as FPs; crowd boxes aren't counted as FNs. This favours
+    the COCO baseline, so reported gains over it are conservative.
+  - Matching and AP use Ultralytics' own logic (match_predictions / ap_per_class), so
+    numbers are consistent with training-time val.
 """
 
 import argparse
@@ -35,15 +25,15 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
-LARS_BOAT_IDS = {11, 12}  # LaRS category ids: 11 = Boat/ship, 12 = Row boats
-LARS_FIRST_OBJECT_ID = 11  # ids below 11 are static obstacle / water / sky
-BOAT_NAMES = {"boat", "row_boat"}  # model class names counted as "boat"
-IOU_THRESHOLDS = np.linspace(0.5, 0.95, 10)  # mAP50-95 averages over these 10 overlap levels
-DEFAULT_CONF = 0.25  # YOLO's default confidence cut-off when you run it normally
+LARS_BOAT_IDS = {11, 12}  # Boat/ship, Row boats
+LARS_FIRST_OBJECT_ID = 11  # lower ids are stuff classes
+BOAT_NAMES = {"boat", "row_boat"}
+IOU_THRESHOLDS = np.linspace(0.5, 0.95, 10)
+DEFAULT_CONF = 0.25  # Ultralytics predict() default
 
 
 def box_iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Overlap (intersection over union) of every box in a (M,4) with every box in b (N,4)."""
+    """Pairwise IoU of xyxy boxes: (M,4) x (N,4) -> (M,N)."""
     if len(a) == 0 or len(b) == 0:
         return np.zeros((len(a), len(b)))
     lt = np.maximum(a[:, None, :2], b[None, :, :2])
@@ -55,10 +45,10 @@ def box_iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def match(iou: np.ndarray) -> np.ndarray:
-    """Mark which predictions are correct at each IoU threshold.
+    """TP matrix (n_pred, n_iou_thresholds) from IoU (n_gt, n_pred), preds sorted by conf desc.
 
-    Same rule as Ultralytics' BaseValidator.match_predictions: going from most to least
-    confident prediction (columns), each one claims the best real box (rows) not yet claimed.
+    Greedy: each pred claims its best unclaimed GT, per threshold. Mirrors Ultralytics'
+    BaseValidator.match_predictions.
     """
     correct = np.zeros((iou.shape[1], len(IOU_THRESHOLDS)), dtype=bool)
     claimed = np.zeros((iou.shape[0], len(IOU_THRESHOLDS)), dtype=bool)
@@ -72,7 +62,7 @@ def match(iou: np.ndarray) -> np.ndarray:
 
 
 def load_ground_truth(json_path: Path) -> dict:
-    """{file_name: (boat boxes, ignore boxes)} in pixel x1,y1,x2,y2, from LaRS's panoptic JSON."""
+    """{file_name: (boat_boxes, ignore_boxes)}, pixel xyxy."""
     ann = json.loads(json_path.read_text(encoding="utf-8"))
     file_names = {im["id"]: im["file_name"] for im in ann["images"]}
     gt = {}
@@ -95,7 +85,7 @@ def load_ground_truth(json_path: Path) -> dict:
 
 
 def score_image(boats: np.ndarray, ignore: np.ndarray, pred: np.ndarray, conf: np.ndarray):
-    """Return (correct matrix, confidences) for one image's boat predictions, after the ignore rule."""
+    """(TP matrix, confs) for one image, with the ignore rule applied."""
     order = np.argsort(-conf, kind="stable")
     pred, conf = pred[order], conf[order]
     correct = match(box_iou(boats, pred))
@@ -108,14 +98,14 @@ def score_image(boats: np.ndarray, ignore: np.ndarray, pred: np.ndarray, conf: n
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", default="yolo11n.pt", help="weights to score (default: off-the-shelf yolo11n.pt)")
-    p.add_argument("--imgsz", type=int, default=640, help="image size; use the model's training size (default: 640)")
+    p.add_argument("--model", default="yolo11n.pt")
+    p.add_argument("--imgsz", type=int, default=640, help="match the model's training size")
     p.add_argument("--lars", type=Path, default=ROOT / "datasets" / "lars_raw" / "val",
-                   help="LaRS split folder containing images/ and panoptic_annotations.json")
-    p.add_argument("--device", default=None, help="'cpu' or a GPU number (default: GPU if there is one)")
+                   help="LaRS split dir (images/ + panoptic_annotations.json)")
+    p.add_argument("--device", default=None)
     args = p.parse_args()
 
-    for stream in (sys.stdout, sys.stderr):  # see train.py: avoid encoding crashes on Windows
+    for stream in (sys.stdout, sys.stderr):  # Windows: see train.py
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
 
@@ -135,11 +125,11 @@ def main() -> None:
         r = model.predict(
             args.lars / "images" / file_name,
             imgsz=args.imgsz,
-            conf=0.001,  # keep low-confidence guesses too: mAP is measured across all cut-offs
-            iou=0.7,  # Ultralytics' validation default
+            conf=0.001,  # conf/iou/max_det match Ultralytics val defaults
+            iou=0.7,
             max_det=300,
             classes=boat_ids,
-            agnostic_nms=True,  # one box per object even if the model has two boat classes
+            agnostic_nms=True,  # boat and row_boat would otherwise both fire on one object
             device=args.device,
             verbose=False,
         )[0]
@@ -148,7 +138,7 @@ def main() -> None:
         all_conf.append(conf)
 
     tp, conf = np.concatenate(all_correct), np.concatenate(all_conf)
-    ap = ap_per_class(tp, conf, np.zeros(len(conf)), np.zeros(n_boats))[5][0]  # AP at the 10 IoU levels
+    ap = ap_per_class(tp, conf, np.zeros(len(conf)), np.zeros(n_boats))[5][0]  # AP per IoU threshold, shape (10,)
     at_default = conf >= DEFAULT_CONF
     found = tp[at_default, 0].sum()
     recall = found / n_boats

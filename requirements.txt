@@ -1,8 +1,5 @@
-# Install PyTorch first, matching your machine (see https://pytorch.org/get-started/locally/):
-#   CPU only (e.g. a laptop):  pip install torch==2.15.0 torchvision==0.29.2 --index-url https://download.pytorch.org/whl/cpu
-#   NVIDIA GPU / Colab:        Colab already has it; elsewhere pick your CUDA version on the page above
-# Then:
-#   pip install -r requirements.txt
+# Install torch/torchvision first for your platform (https://pytorch.org/get-started/locally/), e.g. CPU:
+#   pip install torch==2.15.0 torchvision==0.29.2 --index-url https://download.pytorch.org/whl/cpu
 ultralytics==8.4.204
 numpy==2.5.4
 opencv-python==5.0.0.93

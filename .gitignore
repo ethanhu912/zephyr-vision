@@ -3,15 +3,15 @@
 __pycache__/
 *.pyc
 
-# Too large for git, install yourself.
+# Download LaRS yourself (CC BY-NC 4.0, don't redistribute).
 datasets/
 
-# Too large for git.
+# Weights / exports
 *.pt
 *.onnx
 *.engine
 
-# Training outputs, except the small evaluation table we compare models with
+# Keep only the eval table
 runs/*
 !runs/eval/
 runs/eval/*

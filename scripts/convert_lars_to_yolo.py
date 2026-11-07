@@ -1,16 +1,10 @@
-"""Convert the LaRS dataset (panoptic COCO-style JSON) to YOLO detection format.
+"""Convert LaRS (COCO panoptic) to Ultralytics YOLO detection format.
 
-LaRS ships per-segment bounding boxes inside panoptic_annotations.json, so no mask
-processing is needed. Only the 8 "thing" (obstacle) classes are kept; the stuff
-classes (static obstacle / water / sky) are dropped.
+Uses the per-segment bboxes in panoptic_annotations.json (no mask decoding). Keeps the
+8 "thing" classes; drops stuff (static obstacle / water / sky).
 
-Output layout (what Ultralytics expects):
-    <dst>/images/{train,val}/*.jpg   (hard links to lars_raw, copies as fallback)
-    <dst>/labels/{train,val}/*.txt   (one "cls xc yc w h" line per box, normalized 0-1)
-    <dst>/lars.yaml
-
-Usage:
-    python scripts/convert_lars_to_yolo.py --src datasets/lars_raw --dst datasets/lars_yolo
+Output: <dst>/{images,labels}/{train,val}/ + <dst>/lars.yaml. Images are hard-linked
+from <src> (copied if linking fails).
 """
 
 import argparse
@@ -20,7 +14,7 @@ import shutil
 from collections import Counter
 from pathlib import Path
 
-# LaRS category_id -> (YOLO class index, name). Gaps in LaRS ids (18) are intentional.
+# LaRS category_id -> (YOLO class, name). LaRS has no id 18.
 LARS_TO_YOLO = {
     11: (0, "boat"),
     12: (1, "row_boat"),
@@ -64,13 +58,12 @@ def convert_split(src: Path, dst: Path, split: str, skip_crowd: bool) -> Counter
         lines = []
         for seg in a["segments_info"]:
             if seg["category_id"] not in LARS_TO_YOLO:
-                continue  # stuff class (static obstacle, water, sky)
+                continue  # stuff class
             if skip_crowd and seg.get("iscrowd", 0):
                 stats["skipped_crowd"] += 1
                 continue
             cls, name = LARS_TO_YOLO[seg["category_id"]]
-            x, y, w, h = seg["bbox"]  # COCO: top-left x/y, width, height in pixels
-            # clip to image bounds
+            x, y, w, h = seg["bbox"]  # COCO xywh, top-left origin, pixels
             x0, y0 = max(0.0, x), max(0.0, y)
             x1, y1 = min(float(W), x + w), min(float(H), y + h)
             if x1 <= x0 or y1 <= y0:
@@ -82,7 +75,7 @@ def convert_split(src: Path, dst: Path, split: str, skip_crowd: bool) -> Counter
             stats[name] += 1
 
         link_or_copy(img_path, img_out / im["file_name"])
-        # Empty label file = background image (no obstacles); keeps it in training.
+        # Write empty files too: Ultralytics treats them as background (negative) images.
         (lbl_out / (Path(im["file_name"]).stem + ".txt")).write_text(
             "\n".join(lines) + ("\n" if lines else "")
         )
