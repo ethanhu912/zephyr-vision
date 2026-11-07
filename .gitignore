@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Too large for git, install yourself.
+datasets/
+
+# Too large for git.
+*.pt
+*.onnx
+*.engine
+
+# Training outputs, except the small evaluation table we compare models with
+runs/*
+!runs/eval/
+runs/eval/*
+!runs/eval/boat_eval.csv

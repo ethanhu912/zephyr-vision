@@ -1,0 +1,2 @@
+date,model,imgsz,boats,mAP50,mAP50-95,recall@0.25,precision@0.25
+2026-11-06 21:45,yolo11n.pt,640,795,0.3446,0.2035,0.3208,0.5862
