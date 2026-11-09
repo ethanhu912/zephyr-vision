@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--batch", type=int, default=16, help="-1 = auto-fit to GPU memory")
     p.add_argument("--device", default=None)
+    p.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True,
+                   help="mixed-precision (FP16) training; --no-amp for FP32 (Pascal GPUs gain little from FP16)")
     p.add_argument("--name", default=None, help="default: 'check' or '<model>_lars'")
     args = p.parse_args()
 
@@ -53,6 +55,7 @@ def main() -> None:
         imgsz=args.imgsz,
         batch=args.batch,
         device=args.device,
+        amp=args.amp,
         project=str(ROOT / "runs" / "detect"),
         name=args.name,  # existing name -> Ultralytics suffixes check2, check3, ...
     )
